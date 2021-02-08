@@ -1,5 +1,5 @@
 - [C++ Futures at Instagram Notes](#c-futures-at-instagram-notes)
-  - [Instagram's story](#instagrams-story)
+  - [Instagram's  story](#instagrams--story)
     - [fbthrift](#fbthrift)
       - [Synchronous I/O](#synchronous-io)
         - [Disadvantage](#disadvantage)
@@ -22,6 +22,7 @@
     - [select](#select)
     - [poll](#poll)
     - [epoll](#epoll)
+      - [Why epoll is fast](#why-epoll-is-fast)
     - [Difference](#difference)
 
 # C++ Futures at Instagram Notes
@@ -427,6 +428,41 @@ select() and pselect() allow a program to monitor multiple file
 
 ```
 
+[Example](https://www.gnu.org/software/libc/manual/html_node/Server-Example.html)
+```C
+while (1)
+    {
+      /* Block until input arrives on one or more active sockets. */
+      read_fd_set = active_fd_set;
+      if (select (FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0)
+        {
+          perror ("select");
+          exit (EXIT_FAILURE);
+        }
+
+      /* Service all the sockets with input pending. */
+      for (i = 0; i < FD_SETSIZE; ++i)
+        if (FD_ISSET (i, &read_fd_set))
+          {
+            if (i == sock)
+              {
+                /* Connection request on original socket. */
+                int new;
+                size = sizeof (clientname);
+                new = accept (sock,
+                              (struct sockaddr *) &clientname,
+                              &size);
+
+                FD_SET (new, &active_fd_set);
+              }
+
+          }
+    }
+// Each time when calling select(), OS need to add current process to the waiting list
+// of all sockets he want to liston to
+// And when the process be waked up, it need a loop to check which sockets has data
+```
+
 ### poll
 http://man7.org/linux/man-pages/man2/poll.2.html
 
@@ -502,6 +538,69 @@ One place need pay special attention to is the difference between the following 
                   return EAGAIN.
 
 ```
+
+Example
+
+```c
+int s = socket(AF_INET, SOCK_STREAM, 0);   
+bind(s, ...)
+listen(s, ...)
+int epfd = epoll_create(...);
+epoll_ctl(epfd, ...); //Add all the sockets that need to be monitored to epfd
+
+while(1){
+    int n = epoll_wait(...)
+    for(socket received data){  // rdlist
+        //processing
+    }
+}
+
+```
+
+#### Why epoll is fast
+
+- Separation of functionality
+   - `Select` need to manage "maintaining waiting list" and "blocking process".  Each time when you call `select` you need do both thing.
+   - `Epoll` separate this two operations, use `epoll_ctl` to manage waiting list, and then `epoll_wait` to block process
+- Ready list
+  - When `select` has been triggered, application didn't know which port exactly recevied data but only iterate all of them
+  - `epoll` manages a `rdlist` in the kernel.  For example, let's say `epoll` monitors `sock1`, `sock2` and `sock3`, and then `sock2` and `sock3` received data, if they be referenced by `rdlist`, then we just need to iterate content in `rdlist` to receive all the data
+- Inside epoll
+
+```c
+// let's assume in process A we write these code
+int epfd = epoll_create(...);
+```
+
+<img src="https://user-images.githubusercontent.com/16873751/104975121-9f7ec900-59ae-11eb-8428-26ebee43759d.png" alt="instagram_thread_performance.png" width="400"/>
+
+
+```c
+epoll_ctl(epfd, ...); //Add all the sockets that need to be monitored to epfd
+// let's say it will monitor sock1 and sock2
+```
+<img src="https://user-images.githubusercontent.com/16873751/104974908-1c5d7300-59ae-11eb-8d17-a669a80401f1.png" alt="instagram_thread_performance.png" width="400"/>
+
+```c
+// After calling
+int n = epoll_wait(...)
+```
+<img src="https://user-images.githubusercontent.com/16873751/104974914-23848100-59ae-11eb-9623-4f029e3daf56.png" alt="instagram_thread_performance.png" width="400"/>
+
+```c
+// when data comes
+// schedule process back
+```
+
+<img src="https://user-images.githubusercontent.com/16873751/104974925-2b442580-59ae-11eb-933d-b652bd881599.png" alt="instagram_thread_performance.png" width="400"/>
+
+
+Data structure inside `epoll`
+
+
+
+<img src="https://user-images.githubusercontent.com/16873751/104975619-0650b200-59b0-11eb-8fc3-0f01a939ff0e.png" alt="instagram_thread_performance.png" width="400"/>
+
 
 ### Difference
 
